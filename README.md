@@ -1,0 +1,1 @@
+When you deploy and remove a lot of VMs in vCenter using NSX-T, sometimes it happens so segments of removed virtual machines can hang up, and you need to open Postman and detach them manually making many api requests, so I write a script which can help me to remove such segments.
