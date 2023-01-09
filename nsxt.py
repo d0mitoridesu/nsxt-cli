@@ -33,13 +33,13 @@ class NSX(cmd.Cmd):
         super().__init__()
         self.session = requests.Session()
         self.auth()
-        self.do_sync()
     
     def auth(self):
         user = input("login: ")
         user += "@ouiit.local"
         password = getpass()
         self.session.auth = (user, password)
+        self.segments = []
 
     def do_sync(self):
         self.segments = []
@@ -73,6 +73,9 @@ class NSX(cmd.Cmd):
         except SystemExit:
             return False
         
+        if len(self.segments) == 0:
+            self.do_sync()
+        
         t = PrettyTable(['Name', 'ID', 'Ports', 'Subnets', 'CreatedBy'])
         for segment in self.segments:
             decision = True
@@ -96,9 +99,17 @@ class NSX(cmd.Cmd):
         """
             Remove a segment by ID
         """
+
+        raw_segment = self.session.get(f'https://{nsx_address}/policy/api/v1/infra/segments/{id}', verify=False)
+        if raw_segment.status_code != 200:
+            segment = json.loads(raw_segment.content)
+            print(f'Failed to get {id}')
+            print(json.dumps(segment, indent=4))
+            return False
+
         logical_ports = self.session.get(f'https://{nsx_address}/policy/api/v1/infra/segments/{id}/ports/', verify=False)
         ports = json.loads(logical_ports.content).get("results")
-        if len(ports) > 0 :
+        if ports and len(ports) > 0 :
             for port in ports:
                 print(f"Detach port {port['display_name']}")
                 self.session.post(f'https://{nsx_address}/policy/api/v1/infra/realized-state/realized-entity?action=refresh&intent_path=/infra/segments/{id}/ports/{port["unique_id"]}', verify=False)
@@ -106,14 +117,34 @@ class NSX(cmd.Cmd):
                 self.session.delete(f'https://{nsx_address}/api/v1/logical-ports/{port["unique_id"]}?detach=true', verify=False)
         
         print( f'Removing {id}...' )
-        self.session.delete(f'https://{nsx_address}/policy/api/v1/infra/segments/{id}/segment-discovery-profile-binding-maps/default', verify=False)
-        self.session.delete(f'https://{nsx_address}/policy/api/v1/infra/segments/{id}/segment-security-profile-binding-maps/default', verify=False)
+
+        sdp_raw = self.session.get(f'https://{nsx_address}/policy/api/v1/infra/segments/{id}/segment-discovery-profile-binding-maps', verify=False)
+        sdp = json.loads(sdp_raw.content).get("results")
+        if sdp and len(sdp) > 0:
+            for profile in sdp:
+                path = profile["path"]
+                res = self.session.delete(f'https://{nsx_address}/policy/api/v1{path}', verify=False)
+                status = res.status_code
+                print(f'Removing {path} - {status}')
+        
+        ssp_raw = self.session.get(f'https://{nsx_address}/policy/api/v1/infra/segments/{id}/segment-security-profile-binding-maps', verify=False)
+        ssp = json.loads(ssp_raw.content).get("results")
+        if ssp and len(ssp) > 0:
+            for profile in ssp:
+                path = profile["path"]
+                res = self.session.delete(f'https://{nsx_address}/policy/api/v1{path}', verify=False)
+                status = res.status_code
+                print(f'Removing {path} - {status}')
+        #self.session.delete(f'https://{nsx_address}/policy/api/v1/infra/segments/{id}/segment-discovery-profile-binding-maps/default', verify=False)
+        #self.session.delete(f'https://{nsx_address}/policy/api/v1/infra/segments/{id}/segment-security-profile-binding-maps/default', verify=False)
         seg = self.session.delete(f'https://{nsx_address}/policy/api/v1/infra/segments/{id}', verify=False)
         
         if seg.status_code == 200:
             print(f'{id} is deleted')
         else:
             print(f'Failed to delete {id}!')
+            error = json.loads(seg.content)
+            print(json.dumps(error, indent=4))
     
     def do_describe(self, id):
         """
