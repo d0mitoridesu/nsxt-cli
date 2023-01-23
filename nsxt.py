@@ -1,6 +1,5 @@
 import cmd
 from shlex import shlex
-from progress.bar import Bar
 from getpass import getpass
 import argparse
 import shlex
@@ -8,6 +7,7 @@ import re
 from prettytable import PrettyTable
 import json
 import requests
+import jq
 
 from requests.packages.urllib3.exceptions import InsecureRequestWarning
 requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
@@ -36,27 +36,9 @@ class NSX(cmd.Cmd):
     
     def auth(self):
         user = input("login: ")
-        user += "@ouiit.local"
         password = getpass()
         self.session.auth = (user, password)
         self.segments = []
-
-    def do_sync(self):
-        self.segments = []
-        raw_segments = self.session.get(f'https://{nsx_address}/policy/api/v1/infra/segments', verify=False)
-        segments = json.loads(raw_segments.content).get("results")
-        bar = Bar('Syncing segments', max=len(segments))
-        for segment in segments:
-            if "vlan_ids" in segment.keys():
-                bar.next()
-                continue
-            logical_ports = self.session.get(f'https://{nsx_address}/policy/api/v1/infra/segments/{segment["id"]}/ports/', verify=False)
-            ports = json.loads(logical_ports.content).get("results")
-            ports = ports if ports else []
-            segment["logical_ports"] = ports
-            self.segments.append(segment)
-            bar.next()
-        bar.finish()
 
     def do_ls(self, line):
         """
@@ -65,7 +47,7 @@ class NSX(cmd.Cmd):
         """
         agparser = argparse.ArgumentParser(prog='ls')
         agparser.add_argument("--detach", action='store_true', help='List detached segments')
-        agparser.add_argument("--filter", required=False, help='Filter output by display_name. Excpects regex')
+        agparser.add_argument("--name", required=False, help='Filter output by display_name. Excpects regex')
         agparser.add_argument("--subnet", required=False, help='Filter output by subnet. Excpects regex')
         agparser.add_argument("--user", required=False, help='Filter output by user. Excpects regex')
         try:
@@ -73,33 +55,51 @@ class NSX(cmd.Cmd):
         except SystemExit:
             return False
         
-        if len(self.segments) == 0:
-            self.do_sync()
+        raw_segments = self.session.get(f'https://{nsx_address}/policy/api/v1/infra/segments', verify=False)
+        segments = json.loads(raw_segments.content).get("results")
+
+        raw_logical_switches = self.session.get(f'https://{nsx_address}/api/v1/logical-switches', verify=False)
+        logical_switches = jq.first('.results | map( { (.tags[]|select(.scope=="policyPath")|.tag): .id } ) | add', text=raw_logical_switches.content.decode() )
+
+        raw_logical_ports = self.session.get(f'https://{nsx_address}/api/v1/logical-ports', verify=False)
+        pages = json.loads(raw_logical_ports.content)
+        while(pages.get("cursor")):
+            raw_logical_ports = self.session.get(f'https://{nsx_address}/api/v1/logical-ports?cursor=' + pages["cursor"], verify=False)
+            page = json.loads(raw_logical_ports.content)
+            del pages["cursor"]
+            if page.get("cursor"):
+                pages["cursor"] = page["cursor"]
+            if "results" in page.keys():
+                pages["results"] += page["results"]
         
-        t = PrettyTable(['Name', 'ID', 'Ports', 'Subnets', 'CreatedBy'])
-        for segment in self.segments:
+        logical_ports = jq.first('.results | map(select(.attachment.attachment_type=="VIF")) | group_by(.logical_switch_id)  | map( { (.[0].logical_switch_id): map(.id) } ) | add',  pages)
+        
+        t = PrettyTable(['Name', 'ID', 'Ports', 'Subnets'])
+        for segment in segments:
             decision = True
             nets = ""
+            switch_id = logical_switches.get(segment["path"])
+            ports = len(logical_ports.get(switch_id, []))
             if segment.get("subnets"):
                 nets = ",".join([ net["network"] for net in segment["subnets"] ])
             if args:
-                if args.filter and not re.search(args.filter, segment["display_name"]):
+                if args.name and not re.search(args.name, segment["display_name"]):
                     decision = False
                 if args.subnet and not re.search(args.subnet, nets):
                     decision = False
                 if args.user and not re.search(args.user, segment["_create_user"]):
                     decision = False
-                if args.detach and len(segment["logical_ports"]) != 0:
+                if args.detach and ports != 0:
                     decision = False
             if decision:
-                t.add_row( [ segment["display_name"], segment["id"], len(segment["logical_ports"]), nets, segment["_create_user"] ] )
+                t.add_row( [ segment["display_name"], segment["id"], ports, nets ] )
         print(t)
     
     def do_rm(self, id):
         """
             Remove a segment by ID
         """
-
+        
         raw_segment = self.session.get(f'https://{nsx_address}/policy/api/v1/infra/segments/{id}', verify=False)
         if raw_segment.status_code != 200:
             segment = json.loads(raw_segment.content)
@@ -135,8 +135,7 @@ class NSX(cmd.Cmd):
                 res = self.session.delete(f'https://{nsx_address}/policy/api/v1{path}', verify=False)
                 status = res.status_code
                 print(f'Removing {path} - {status}')
-        #self.session.delete(f'https://{nsx_address}/policy/api/v1/infra/segments/{id}/segment-discovery-profile-binding-maps/default', verify=False)
-        #self.session.delete(f'https://{nsx_address}/policy/api/v1/infra/segments/{id}/segment-security-profile-binding-maps/default', verify=False)
+        
         seg = self.session.delete(f'https://{nsx_address}/policy/api/v1/infra/segments/{id}', verify=False)
         
         if seg.status_code == 200:
@@ -145,6 +144,26 @@ class NSX(cmd.Cmd):
             print(f'Failed to delete {id}!')
             error = json.loads(seg.content)
             print(json.dumps(error, indent=4))
+    
+    def do_rm_by(self, line):
+        """
+            Remove a group of segments by regex
+        """
+        agparser = argparse.ArgumentParser(prog='rm_by')
+        agparser.add_argument("--name", required=False, help='Filter output by display_name. Excpects regex')
+        agparser.add_argument("--id", required=False, help='Filter output by id. Excpects regex')
+        agparser.add_argument("--detach", action='store_true', help='Filter detached segments')
+
+        try:
+            args = agparser.parse_args(shlex.split(line))
+        except SystemExit:
+            return False
+        
+        raw_segments = self.session.get(f'https://{nsx_address}/policy/api/v1/infra/segments', verify=False)
+        segments = json.loads(raw_segments.content).get("results")
+        for segment in segments:
+            if re.search(args.name, segment["display_name"]):
+                self.do_rm(segment["id"])
     
     def do_describe(self, id):
         """
@@ -167,7 +186,7 @@ class NSX(cmd.Cmd):
         t = PrettyTable(['ID', 'NAME', 'Status'])
         if len(ports) > 0 :
             for port in ports:
-                # Refresh info about the port and get it's status
+                # Refresh info about the port and get its status
                 # The port can be attached to VM which does not exists
                 self.session.post(f'https://{nsx_address}/policy/api/v1/infra/realized-state/realized-entity?action=refresh&intent_path=/infra/segments/{id}/ports/{port["id"]}', verify=False)
                 port_state_raw = self.session.get(f'https://{nsx_address}/policy/api/v1/search?query=resource_type:SegmentPort AND path:"/infra/segments/{id}/ports/{port["id"]}"', verify=False)
