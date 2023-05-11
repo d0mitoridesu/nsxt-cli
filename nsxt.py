@@ -100,6 +100,8 @@ class NSX(cmd.Cmd):
             Remove a segment by ID
         """
         
+        print( f'{color.BOLD}{color.RED}Removing {id}...{color.END}' )
+        
         raw_segment = self.session.get(f'https://{nsx_address}/policy/api/v1/infra/segments/{id}', verify=False)
         if raw_segment.status_code != 200:
             segment = json.loads(raw_segment.content)
@@ -115,8 +117,6 @@ class NSX(cmd.Cmd):
                 self.session.post(f'https://{nsx_address}/policy/api/v1/infra/realized-state/realized-entity?action=refresh&intent_path=/infra/segments/{id}/ports/{port["unique_id"]}', verify=False)
                 self.session.get(f'https://{nsx_address}/policy/api/v1/search?query=resource_type:SegmentPort AND path:"/infra/segments/{id}/ports/{port["unique_id"]}"', verify=False)
                 self.session.delete(f'https://{nsx_address}/api/v1/logical-ports/{port["unique_id"]}?detach=true', verify=False)
-        
-        print( f'{color.BOLD}{color.RED}Removing {id}...{color.END}' )
 
         sdp_raw = self.session.get(f'https://{nsx_address}/policy/api/v1/infra/segments/{id}/segment-discovery-profile-binding-maps', verify=False)
         self.remove_bindings(json.loads(sdp_raw.content).get("results"))
