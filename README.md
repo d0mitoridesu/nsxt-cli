@@ -49,3 +49,12 @@ Removing /infra/segments/vRO_S_LAB_Win_0_Sarukhanov.R.B/segment-discovery-profil
 Removing /infra/segments/vRO_S_LAB_Win_0_Sarukhanov.R.B/segment-security-profile-binding-maps/f965f452-0f04-4dc0-9db5-99c805fef20f - 200
 vRO_S_LAB_Win_0_Sarukhanov.R.B is deleted
 ```
+
+```bash
+nsx-t > rm_by --name '^vRO_.+_(Sarukhanov\.R\.B|Ivanov\.I.I)$'
+Detach port vRO_CLI1_Sarukhanov.R.B.vmx@951a7105-104c-48aa-a7dd-e8d84fa6ea41
+Removing vRO_S_LAB_Win_0_Sarukhanov.R.B...
+Removing /infra/segments/vRO_S_LAB_Win_0_Sarukhanov.R.B/segment-discovery-profile-binding-maps/f965f452-0f04-4dc0-9db5-99c805fef20f - 200
+Removing /infra/segments/vRO_S_LAB_Win_0_Sarukhanov.R.B/segment-security-profile-binding-maps/f965f452-0f04-4dc0-9db5-99c805fef20f - 200
+vRO_S_LAB_Win_0_Sarukhanov.R.B is deleted
+```
