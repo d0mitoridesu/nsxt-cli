@@ -135,7 +135,16 @@ class NSX(cmd.Cmd):
                 res = self.session.delete(f'https://{nsx_address}/policy/api/v1{path}', verify=False)
                 status = res.status_code
                 print(f'Removing {path} - {status}')
-        
+
+        qos_raw = self.session.get(f'https://{nsx_address}/policy/api/v1/infra/segments/{id}/segment-qos-profile-binding-maps', verify=False)
+        qos = json.loads(qos_raw.content).get("results")
+        if qos and len(qos) > 0:
+            for profile in qos:
+                path = profile["path"]
+                res = self.session.delete(f'https://{nsx_address}/policy/api/v1{path}', verify=False)
+                status = res.status_code
+                print(f'Removing {path} - {status}')
+
         seg = self.session.delete(f'https://{nsx_address}/policy/api/v1/infra/segments/{id}', verify=False)
         
         if seg.status_code == 200:
