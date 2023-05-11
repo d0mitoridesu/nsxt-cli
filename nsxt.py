@@ -71,7 +71,7 @@ class NSX(cmd.Cmd):
                 pages["cursor"] = page["cursor"]
             if "results" in page.keys():
                 pages["results"] += page["results"]
-        
+
         logical_ports = jq.first('.results | map(select(.attachment.attachment_type=="VIF")) | group_by(.logical_switch_id)  | map( { (.[0].logical_switch_id): map(.id) } ) | add',  pages)
         
         t = PrettyTable(['Name', 'ID', 'Ports', 'Subnets'])
@@ -116,34 +116,16 @@ class NSX(cmd.Cmd):
                 self.session.get(f'https://{nsx_address}/policy/api/v1/search?query=resource_type:SegmentPort AND path:"/infra/segments/{id}/ports/{port["unique_id"]}"', verify=False)
                 self.session.delete(f'https://{nsx_address}/api/v1/logical-ports/{port["unique_id"]}?detach=true', verify=False)
         
-        print( f'Removing {id}...' )
+        print( f'{color.BOLD}{color.RED}Removing {id}...{color.END}' )
 
         sdp_raw = self.session.get(f'https://{nsx_address}/policy/api/v1/infra/segments/{id}/segment-discovery-profile-binding-maps', verify=False)
-        sdp = json.loads(sdp_raw.content).get("results")
-        if sdp and len(sdp) > 0:
-            for profile in sdp:
-                path = profile["path"]
-                res = self.session.delete(f'https://{nsx_address}/policy/api/v1{path}', verify=False)
-                status = res.status_code
-                print(f'Removing {path} - {status}')
+        self.remove_bindings(json.loads(sdp_raw.content).get("results"))
         
         ssp_raw = self.session.get(f'https://{nsx_address}/policy/api/v1/infra/segments/{id}/segment-security-profile-binding-maps', verify=False)
-        ssp = json.loads(ssp_raw.content).get("results")
-        if ssp and len(ssp) > 0:
-            for profile in ssp:
-                path = profile["path"]
-                res = self.session.delete(f'https://{nsx_address}/policy/api/v1{path}', verify=False)
-                status = res.status_code
-                print(f'Removing {path} - {status}')
+        self.remove_bindings(json.loads(ssp_raw.content).get("results"))
 
         qos_raw = self.session.get(f'https://{nsx_address}/policy/api/v1/infra/segments/{id}/segment-qos-profile-binding-maps', verify=False)
-        qos = json.loads(qos_raw.content).get("results")
-        if qos and len(qos) > 0:
-            for profile in qos:
-                path = profile["path"]
-                res = self.session.delete(f'https://{nsx_address}/policy/api/v1{path}', verify=False)
-                status = res.status_code
-                print(f'Removing {path} - {status}')
+        self.remove_bindings(json.loads(qos_raw.content).get("results"))
 
         seg = self.session.delete(f'https://{nsx_address}/policy/api/v1/infra/segments/{id}', verify=False)
         
@@ -154,6 +136,15 @@ class NSX(cmd.Cmd):
             error = json.loads(seg.content)
             print(json.dumps(error, indent=4))
     
+    def remove_bindings(self, bindings):
+        # Remove all bindings maps for a profile
+        if bindings and len(bindings) > 0:
+            for profile in bindings:
+                path = profile["path"]
+                res = self.session.delete(f'https://{nsx_address}/policy/api/v1{path}', verify=False)
+                status = res.status_code
+                print(f'Removing {path} - {status}')
+
     def do_rm_by(self, line):
         """
             Remove a group of segments by regex
