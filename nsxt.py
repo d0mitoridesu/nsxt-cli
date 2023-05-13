@@ -1,9 +1,8 @@
 import cmd
 import json
-from shlex import shlex
+import shlex
 from getpass import getpass
 import argparse
-import shlex
 import re
 from prettytable import PrettyTable
 import requests
@@ -12,9 +11,10 @@ import jq
 from requests.packages.urllib3.exceptions import InsecureRequestWarning
 requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
 
-nsx_address = '172.30.77.57'
+NSX_ADDRESS = '172.30.77.57'
 
 class color:
+    """ Colors for text highlighting """
     PURPLE = '\033[95m'
     CYAN = '\033[96m'
     DARKCYAN = '\033[36m'
@@ -27,6 +27,9 @@ class color:
     END = '\033[0m'
 
 class NSX(cmd.Cmd):
+    """ 
+        Commandline tool for listing and removing segments
+    """
     prompt = f'{color.BOLD}{color.GREEN}nsx-t >{color.END} '
 
     def __init__(self):
@@ -35,6 +38,7 @@ class NSX(cmd.Cmd):
         self.auth()
 
     def auth(self):
+        """ Authentication method to get access to NSX API """
         user = input("login: ")
         password = getpass()
         self.session.auth = (user, password)
@@ -48,18 +52,18 @@ class NSX(cmd.Cmd):
             for profile in bindings:
                 path = profile["path"]
                 res = self.session.delete(
-                    f"https://{nsx_address}/policy/api/v1{path}",
+                    f"https://{NSX_ADDRESS}/policy/api/v1{path}",
                     verify=False
                 )
                 status = res.status_code
                 print(f"Removing {path} - {status}")
 
-    def get_segment(self, id: str):
+    def get_segment(self, segment_id: str):
         """
         Get the segment by id
         """
         raw_segment = self.session.get(
-            f"https://{nsx_address}/policy/api/v1/infra/segments/{id}",
+            f"https://{NSX_ADDRESS}/policy/api/v1/infra/segments/{segment_id}",
             verify=False
         )
         if raw_segment.status_code != 200:
@@ -67,15 +71,21 @@ class NSX(cmd.Cmd):
         return json.loads(raw_segment.content)
 
     def get_segments(self) -> list[dict]:
+        """ 
+            Get all segments
+        """
         raw_segments = self.session.get(
-            f'https://{nsx_address}/policy/api/v1/infra/segments',
+            f'https://{NSX_ADDRESS}/policy/api/v1/infra/segments',
             verify=False
         )
         return json.loads(raw_segments.content).get("results", [])
 
     def get_logical_switches(self) -> dict:
+        """
+            Get logical switches
+        """
         raw_logical_switches = self.session.get(
-            f'https://{nsx_address}/api/v1/logical-switches',
+            f'https://{NSX_ADDRESS}/api/v1/logical-switches',
             verify=False
         )
         return jq.first(
@@ -88,13 +98,13 @@ class NSX(cmd.Cmd):
         List of switches with logical ports
         """
         raw_logical_ports = self.session.get(
-            f'https://{nsx_address}/api/v1/logical-ports',
+            f'https://{NSX_ADDRESS}/api/v1/logical-ports',
             verify=False
         )
         pages = json.loads(raw_logical_ports.content)
         while pages.get("cursor"):
             raw_logical_ports = self.session.get(
-                f'https://{nsx_address}/api/v1/logical-ports?cursor=' + pages["cursor"],
+                f'https://{NSX_ADDRESS}/api/v1/logical-ports?cursor=' + pages["cursor"],
                 verify=False
             )
             page = json.loads(raw_logical_ports.content)
@@ -134,13 +144,13 @@ class NSX(cmd.Cmd):
         try:
             args = agparser.parse_args(shlex.split(line))
         except SystemExit:
-            return False
+            return
 
         segments = self.get_segments()
         logical_switches = self.get_logical_switches()
         logical_ports = self.get_logical_ports()
 
-        t = PrettyTable(['Name', 'ID', 'Ports', 'Subnets'])
+        table = PrettyTable(['Name', 'ID', 'Ports', 'Subnets'])
         for segment in segments:
             decision = True
             nets = ""
@@ -158,23 +168,23 @@ class NSX(cmd.Cmd):
                 if args.detach and ports != 0:
                     decision = False
             if decision:
-                t.add_row( [ segment["display_name"], segment["id"], ports, nets ] )
-        print(t)
+                table.add_row( [ segment["display_name"], segment["id"], ports, nets ] )
+        print(table)
 
-    def do_rm(self, id):
+    def do_rm(self, segment_id):
         """
             Remove a segment by ID
         """
 
-        print( f'{color.BOLD}{color.RED}Removing {id}...{color.END}' )
+        print( f'{color.BOLD}{color.RED}Removing {segment_id}...{color.END}' )
 
-        segment = self.get_segment(id)
+        segment = self.get_segment(segment_id)
         if not segment:
-            print(f'Failed to get {id}')
-            return False
+            print(f'Failed to get {segment_id}')
+            return
 
         logical_ports = self.session.get(
-            f'https://{nsx_address}/policy/api/v1/infra/segments/{id}/ports/',
+            f'https://{NSX_ADDRESS}/policy/api/v1/infra/segments/{segment_id}/ports/',
             verify=False
         )
         ports = json.loads(logical_ports.content).get("results")
@@ -182,42 +192,42 @@ class NSX(cmd.Cmd):
             for port in ports:
                 print(f"Detach port {port['display_name']}")
                 self.session.post(
-                    f'https://{nsx_address}/policy/api/v1/infra/realized-state/realized-entity?action=refresh&intent_path=/infra/segments/{id}/ports/{port["unique_id"]}',
+                    f'https://{NSX_ADDRESS}/policy/api/v1/infra/realized-state/realized-entity?action=refresh&intent_path=/infra/segments/{segment_id}/ports/{port["unique_id"]}',
                     verify=False
                 )
                 self.session.get(
-                    f'https://{nsx_address}/policy/api/v1/search?query=resource_type:SegmentPort AND path:"/infra/segments/{id}/ports/{port["unique_id"]}"',
+                    f'https://{NSX_ADDRESS}/policy/api/v1/search?query=resource_type:SegmentPort AND path:"/infra/segments/{segment_id}/ports/{port["unique_id"]}"',
                     verify=False
                 )
                 self.session.delete(
-                    f'https://{nsx_address}/api/v1/logical-ports/{port["unique_id"]}?detach=true',
+                    f'https://{NSX_ADDRESS}/api/v1/logical-ports/{port["unique_id"]}?detach=true',
                     verify=False
                 )
 
         sdp_raw = self.session.get(
-            f'https://{nsx_address}/policy/api/v1/infra/segments/{id}/segment-discovery-profile-binding-maps',
+            f'https://{NSX_ADDRESS}/policy/api/v1/infra/segments/{segment_id}/segment-discovery-profile-binding-maps',
             verify=False
         )
         self.remove_bindings(json.loads(sdp_raw.content).get("results"))
 
         ssp_raw = self.session.get(
-            f'https://{nsx_address}/policy/api/v1/infra/segments/{id}/segment-security-profile-binding-maps',
+            f'https://{NSX_ADDRESS}/policy/api/v1/infra/segments/{segment_id}/segment-security-profile-binding-maps',
             verify=False
         )
         self.remove_bindings(json.loads(ssp_raw.content).get("results"))
 
         qos_raw = self.session.get(
-            f'https://{nsx_address}/policy/api/v1/infra/segments/{id}/segment-qos-profile-binding-maps',
+            f'https://{NSX_ADDRESS}/policy/api/v1/infra/segments/{segment_id}/segment-qos-profile-binding-maps',
             verify=False
         )
         self.remove_bindings(json.loads(qos_raw.content).get("results"))
 
-        seg = self.session.delete(f'https://{nsx_address}/policy/api/v1/infra/segments/{id}', verify=False)
+        seg = self.session.delete(f'https://{NSX_ADDRESS}/policy/api/v1/infra/segments/{segment_id}', verify=False)
 
         if seg.status_code == 200:
-            print(f'{id} is deleted')
+            print(f'{segment_id} is deleted')
         else:
-            print(f'Failed to delete {id}!')
+            print(f'Failed to delete {segment_id}!')
             error = json.loads(seg.content)
             print(json.dumps(error, indent=4))
 
@@ -233,52 +243,55 @@ class NSX(cmd.Cmd):
         try:
             args = agparser.parse_args(shlex.split(line))
         except SystemExit:
-            return False
+            return
 
         segments = self.get_segments()
         for segment in segments:
             if re.search(args.name, segment["display_name"]):
                 self.do_rm(segment["id"])
 
-    def do_describe(self, id):
+    def do_describe(self, segment_id):
         """
         Show info about a segment and its connected ports
         """
-        segment = self.get_segment(id)
+        segment = self.get_segment(segment_id)
         if not segment:
             print("The segment was not found")
-            return False
+            return
 
         # Print INFO about the segment
         print(f'{color.BOLD}Display name:{color.END} {segment["display_name"]}')
-        print(f'{color.BOLD}ID:{color.END} {id}')
+        print(f'{color.BOLD}ID:{color.END} {segment_id}')
         print(f'{color.BOLD}Cretaed by:{color.END} {segment["_create_user"]}')
 
         # Print INFO about the ports
         logical_ports = self.session.get(
-            f'https://{nsx_address}/policy/api/v1/infra/segments/{id}/ports/',
+            f'https://{NSX_ADDRESS}/policy/api/v1/infra/segments/{segment_id}/ports/',
             verify=False
         )
         ports = json.loads(logical_ports.content).get("results")
-        t = PrettyTable(['ID', 'NAME', 'Status'])
+        table = PrettyTable(['ID', 'NAME', 'Status'])
         if len(ports) > 0 :
             for port in ports:
                 # Refresh info about the port and get its status
                 # The port can be attached to VM which does not exists
                 self.session.post(
-                    f'https://{nsx_address}/policy/api/v1/infra/realized-state/realized-entity?action=refresh&intent_path=/infra/segments/{id}/ports/{port["id"]}',
+                    f'https://{NSX_ADDRESS}/policy/api/v1/infra/realized-state/realized-entity?action=refresh&intent_path=/infra/segments/{segment_id}/ports/{port["id"]}',
                     verify=False
                 )
                 port_state_raw = self.session.get(
-                    f'https://{nsx_address}/policy/api/v1/search?query=resource_type:SegmentPort AND path:"/infra/segments/{id}/ports/{port["id"]}"',
+                    f'https://{NSX_ADDRESS}/policy/api/v1/search?query=resource_type:SegmentPort AND path:"/infra/segments/{segment_id}/ports/{port["id"]}"',
                     verify=False
                 )
                 port_state = json.loads(port_state_raw.content).get("results")
                 status = port_state[0]["status"]["consolidated_status"]["consolidated_status"]
-                t.add_row( [ port["unique_id"], port["display_name"], status ] )
-        print(t)
+                table.add_row( [ port["unique_id"], port["display_name"], status ] )
+        print(table)
 
     def do_EOF(self, line):
+        """
+            If a command handler returns a true value, the program will exit cleanly
+        """
         return True
 
 if __name__ == '__main__':
